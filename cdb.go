@@ -13,7 +13,6 @@ import (
 	"hash"
 	"io"
 	"os"
-	"sync"
 )
 
 const indexSize = 256 * 8
@@ -25,10 +24,10 @@ var ErrBufferTooSmall = errors.New("The buffer is to small to read the requested
 // CDB represents an open CDB database. It can only be used for reads; to
 // create a database, use Writer.
 type CDB struct {
-	reader       io.ReaderAt
-	hasher       hash.Hash32
-	index        index
-	tuplestorage *sync.Pool
+	reader    io.ReaderAt
+	hasher    hash.Hash32
+	index     index
+	tuplepool *Pool
 }
 
 type table struct {
@@ -57,7 +56,7 @@ func New(reader io.ReaderAt, hasher hash.Hash32) (*CDB, error) {
 		hasher = newCDBHash()
 	}
 
-	cdb := &CDB{reader: reader, hasher: hasher, tuplestorage: &sync.Pool{New: func() interface{} { return make([]byte, 8) }}}
+	cdb := &CDB{reader: reader, hasher: hasher, tuplepool: new(Pool)}
 	err := cdb.readIndex()
 	if err != nil {
 		return nil, err

@@ -22,7 +22,6 @@ type Writer struct {
 	writer       io.WriteSeeker
 	entries      [256][]entry
 	finalizeOnce sync.Once
-	tuplestorage *sync.Pool
 
 	bufferedWriter      *bufio.Writer
 	bufferedOffset      int64
@@ -69,7 +68,6 @@ func NewWriter(writer io.WriteSeeker, hasher hash.Hash32) (*Writer, error) {
 		writer:         writer,
 		bufferedWriter: bufio.NewWriterSize(writer, 65536),
 		bufferedOffset: indexSize,
-		tuplestorage:   &sync.Pool{New: func() interface{} { return make([]byte, 8) }},
 	}, nil
 }
 
@@ -149,7 +147,7 @@ func (cdb *Writer) Freeze() (*CDB, error) {
 	}
 
 	if readerAt, ok := cdb.writer.(io.ReaderAt); ok {
-		return &CDB{reader: readerAt, index: index, hasher: cdb.hasher, tuplestorage: cdb.tuplestorage}, nil
+		return &CDB{reader: readerAt, index: index, hasher: cdb.hasher, tuplepool: new(Pool)}, nil
 	} else {
 		return nil, os.ErrInvalid
 	}
