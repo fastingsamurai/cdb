@@ -6,6 +6,7 @@ type Iterator struct {
 	pos    uint32
 	endPos uint32
 	err    error
+	buffer []byte
 	key    []byte
 	value  []byte
 }
@@ -28,22 +29,25 @@ func (iter *Iterator) Next() bool {
 		return false
 	}
 
-	keyLength, valueLength, err := readTuple(iter.db.reader, iter.pos)
+	keyLength, valueLength, err := iter.db.readTuple(iter.db.reader, iter.pos)
 	if err != nil {
 		iter.err = err
 		return false
 	}
 
-	buf := make([]byte, keyLength+valueLength)
-	_, err = iter.db.reader.ReadAt(buf, int64(iter.pos+8))
+	if uint32(len(iter.buffer)) < keyLength+valueLength {
+		iter.buffer = make([]byte, (keyLength+valueLength)*2)
+	}
+
+	_, err = iter.db.reader.ReadAt(iter.buffer, int64(iter.pos+8))
 	if err != nil {
 		iter.err = err
 		return false
 	}
 
 	// Update iterator state
-	iter.key = buf[:keyLength]
-	iter.value = buf[keyLength:]
+	iter.key = iter.buffer[:keyLength]
+	iter.value = iter.buffer[keyLength:]
 	iter.pos += 8 + keyLength + valueLength
 
 	return true

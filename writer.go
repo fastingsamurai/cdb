@@ -22,6 +22,7 @@ type Writer struct {
 	writer       io.WriteSeeker
 	entries      [256][]entry
 	finalizeOnce sync.Once
+	tuplestorage *sync.Pool
 
 	bufferedWriter      *bufio.Writer
 	bufferedOffset      int64
@@ -68,6 +69,7 @@ func NewWriter(writer io.WriteSeeker, hasher hash.Hash32) (*Writer, error) {
 		writer:         writer,
 		bufferedWriter: bufio.NewWriterSize(writer, 65536),
 		bufferedOffset: indexSize,
+		tuplestorage:   &sync.Pool{New: func() interface{} { return make([]byte, 8) }},
 	}, nil
 }
 
@@ -89,7 +91,7 @@ func (cdb *Writer) Put(key, value []byte) error {
 	cdb.entries[table] = append(cdb.entries[table], entry)
 
 	// Write the key length, then value length, then key, then value.
-	err := writeTuple(cdb.bufferedWriter, uint32(len(key)), uint32(len(value)))
+	err := cdb.writeTuple(cdb.bufferedWriter, uint32(len(key)), uint32(len(value)))
 	if err != nil {
 		return err
 	}
@@ -147,7 +149,7 @@ func (cdb *Writer) Freeze() (*CDB, error) {
 	}
 
 	if readerAt, ok := cdb.writer.(io.ReaderAt); ok {
-		return &CDB{reader: readerAt, index: index, hasher: cdb.hasher}, nil
+		return &CDB{reader: readerAt, index: index, hasher: cdb.hasher, tuplestorage: cdb.tuplestorage}, nil
 	} else {
 		return nil, os.ErrInvalid
 	}
@@ -181,7 +183,7 @@ func (cdb *Writer) finalize() (index, error) {
 		}
 
 		for _, entry := range sorted {
-			err := writeTuple(cdb.bufferedWriter, entry.hash, entry.offset)
+			err := cdb.writeTuple(cdb.bufferedWriter, entry.hash, entry.offset)
 			if err != nil {
 				return index, err
 			}

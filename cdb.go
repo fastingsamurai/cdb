@@ -9,21 +9,26 @@ package cdb
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"hash"
 	"io"
 	"os"
+	"sync"
 )
 
 const indexSize = 256 * 8
 
 type index [256]table
 
+var ErrBufferTooSmall = errors.New("The buffer is to small to read the requested data")
+
 // CDB represents an open CDB database. It can only be used for reads; to
 // create a database, use Writer.
 type CDB struct {
-	reader io.ReaderAt
-	hasher hash.Hash32
-	index  index
+	reader       io.ReaderAt
+	hasher       hash.Hash32
+	index        index
+	tuplestorage *sync.Pool
 }
 
 type table struct {
@@ -52,7 +57,7 @@ func New(reader io.ReaderAt, hasher hash.Hash32) (*CDB, error) {
 		hasher = newCDBHash()
 	}
 
-	cdb := &CDB{reader: reader, hasher: hasher}
+	cdb := &CDB{reader: reader, hasher: hasher, tuplestorage: &sync.Pool{New: func() interface{} { return make([]byte, 8) }}}
 	err := cdb.readIndex()
 	if err != nil {
 		return nil, err
@@ -61,8 +66,8 @@ func New(reader io.ReaderAt, hasher hash.Hash32) (*CDB, error) {
 	return cdb, nil
 }
 
-// Get returns the value for a given key, or nil if it can't be found.
-func (cdb *CDB) Get(key []byte) ([]byte, error) {
+// Get returns the value for a given key
+func (cdb *CDB) Get(key []byte, dst []byte) ([]byte, error) {
 	cdb.hasher.Reset()
 	cdb.hasher.Write(key)
 	hash := cdb.hasher.Sum32()
@@ -78,7 +83,7 @@ func (cdb *CDB) Get(key []byte) ([]byte, error) {
 
 	for {
 		slotOffset := table.offset + (8 * slot)
-		slotHash, offset, err := readTuple(cdb.reader, slotOffset)
+		slotHash, offset, err := cdb.readTuple(cdb.reader, slotOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -87,11 +92,11 @@ func (cdb *CDB) Get(key []byte) ([]byte, error) {
 		if slotHash == 0 {
 			break
 		} else if slotHash == hash {
-			value, err := cdb.getValueAt(offset, key)
+			b, err := cdb.getValueAt(offset, key, dst)
 			if err != nil {
 				return nil, err
-			} else if value != nil {
-				return value, nil
+			} else if b != nil {
+				return b, nil
 			}
 		}
 
@@ -131,8 +136,8 @@ func (cdb *CDB) readIndex() error {
 	return nil
 }
 
-func (cdb *CDB) getValueAt(offset uint32, expectedKey []byte) ([]byte, error) {
-	keyLength, valueLength, err := readTuple(cdb.reader, offset)
+func (cdb *CDB) getValueAt(offset uint32, expectedKey []byte, dst []byte) ([]byte, error) {
+	keyLength, valueLength, err := cdb.readTuple(cdb.reader, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -142,16 +147,19 @@ func (cdb *CDB) getValueAt(offset uint32, expectedKey []byte) ([]byte, error) {
 		return nil, nil
 	}
 
-	buf := make([]byte, keyLength+valueLength)
-	_, err = cdb.reader.ReadAt(buf, int64(offset+8))
+	n := keyLength + valueLength
+	if n > uint32(len(dst)) {
+		return nil, ErrBufferTooSmall
+	}
+	_, err = cdb.reader.ReadAt(dst[:n], int64(offset+8))
 	if err != nil {
 		return nil, err
 	}
 
 	// If they keys don't match, this isn't it.
-	if bytes.Compare(buf[:keyLength], expectedKey) != 0 {
+	if bytes.Compare(dst[:keyLength], expectedKey) != 0 {
 		return nil, nil
 	}
 
-	return buf[keyLength:], nil
+	return dst[keyLength:n], nil
 }
